@@ -1,5 +1,5 @@
 // Sample book text - Harry Potter and the Sorcerer's Stone (first chapter excerpt)
-const bookText = [
+const bookTextRaw = [
     "While Mrs. Dursley was in the bathroom, Mr. Dursley crept to the bedroom window and peered down into the front garden.",
     "The cat was still there. It was staring down Privet Drive as though it were waiting for something.",
     "Was he imagining things? Could all this have something to do with the Potters?",
@@ -22,6 +22,24 @@ const bookText = [
     "It was now reading the sign that said Privet Drive—no, looking at the sign.",
 ];
 
+// Normalize text to use standard keyboard characters
+function normalizeText(text) {
+    return text
+        // Em dash and en dash → regular hyphen
+        .replace(/—/g, '-')
+        .replace(/–/g, '-')
+        // Smart quotes → regular quotes
+        .replace(/"/g, '"')
+        .replace(/"/g, '"')
+        .replace(/'/g, "'")
+        .replace(/'/g, "'")
+        // Ellipsis → three periods
+        .replace(/…/g, '...');
+}
+
+// Normalize all book text on load
+const bookText = bookTextRaw.map(sentence => normalizeText(sentence));
+
 // App State
 let state = {
     currentSentenceIndex: 0,
@@ -35,6 +53,12 @@ let state = {
     fontSize: 24,
     isTyping: false,
     typingTimeout: null,
+
+    // Rolling history for smooth stats
+    sentenceHistory: [], // Array of {wpm, correctChars, totalChars, duration} for last 25 sentences
+    currentSentenceStartTime: null,
+    currentSentenceCorrectChars: 0,
+    currentSentenceTotalChars: 0,
 };
 
 // Caret element
@@ -83,6 +107,12 @@ function loadProgress() {
         const progress = JSON.parse(saved);
         state.currentSentenceIndex = progress.currentSentenceIndex || 0;
         state.totalWordsTyped = progress.totalWordsTyped || 0;
+        state.sentenceHistory = progress.sentenceHistory || [];
+
+        // Ensure we don't load more than 25 sentences
+        if (state.sentenceHistory.length > 25) {
+            state.sentenceHistory = state.sentenceHistory.slice(-25);
+        }
     }
 }
 
@@ -91,6 +121,7 @@ function saveProgress() {
     localStorage.setItem('retypeProgress', JSON.stringify({
         currentSentenceIndex: state.currentSentenceIndex,
         totalWordsTyped: state.totalWordsTyped,
+        sentenceHistory: state.sentenceHistory,
     }));
 }
 
@@ -148,7 +179,9 @@ function displayCurrentSentence() {
 
     // Reset state for new sentence
     state.currentCharIndex = 0;
-    state.startTime = null;
+    state.currentSentenceStartTime = null;
+    state.currentSentenceCorrectChars = 0;
+    state.currentSentenceTotalChars = 0;
 
     // Position caret at first character after DOM updates
     requestAnimationFrame(() => {
@@ -162,12 +195,15 @@ function updateCaret() {
 
     const chars = passageEl.querySelectorAll('.char');
 
-    // Remove current class from all chars
+    // Remove current class from all chars (don't highlight any character)
     chars.forEach(char => char.classList.remove('current'));
 
     if (state.currentCharIndex < chars.length) {
         const currentChar = chars[state.currentCharIndex];
-        currentChar.classList.add('current');
+
+        // DO NOT add 'current' class - we don't want to highlight the character
+        // The caret position is enough to show where the user should type
+        // Only typed characters should be white, untyped should stay gray
 
         // Get position of current character
         const charRect = currentChar.getBoundingClientRect();
@@ -218,9 +254,14 @@ function handleKeyPress(typedChar) {
         startHint.classList.add('hidden');
     }
 
-    // Start timer on first keystroke
+    // Start timer on first keystroke of session
     if (state.startTime === null) {
         state.startTime = Date.now();
+    }
+
+    // Start timer for current sentence on first keystroke
+    if (state.currentSentenceStartTime === null) {
+        state.currentSentenceStartTime = Date.now();
     }
 
     // Set typing state
@@ -242,12 +283,19 @@ function handleKeyPress(typedChar) {
     // Debug logging
     console.log('Typed:', JSON.stringify(typedChar), 'Expected:', JSON.stringify(expectedChar), 'Match:', typedChar === expectedChar);
 
+    // Track stats for current sentence
+    state.currentSentenceTotalChars++;
+
+    // Track global stats (for total words display)
     state.totalChars++;
 
     if (typedChar === expectedChar) {
         // Correct character
         charEl.classList.add('typed');
         charEl.classList.remove('error');
+
+        // Track stats
+        state.currentSentenceCorrectChars++;
         state.correctChars++;
         state.currentCharIndex++;
 
@@ -282,7 +330,28 @@ function handleSentenceComplete() {
     const words = sentence.split(' ').filter(w => w.trim().length > 0).length;
     state.totalWordsTyped += words;
 
-    console.log('Sentence complete! Words in sentence:', words, 'Total words:', state.totalWordsTyped);
+    // Calculate stats for this sentence
+    const sentenceDuration = (Date.now() - state.currentSentenceStartTime) / 1000 / 60; // in minutes
+    const sentenceWPM = sentenceDuration > 0 ? (words / sentenceDuration) : 0;
+
+    // Add sentence data to history
+    const sentenceData = {
+        wpm: sentenceWPM,
+        correctChars: state.currentSentenceCorrectChars,
+        totalChars: state.currentSentenceTotalChars,
+        duration: sentenceDuration,
+        words: words
+    };
+
+    state.sentenceHistory.push(sentenceData);
+
+    // Keep only last 25 sentences for accuracy calculation
+    if (state.sentenceHistory.length > 25) {
+        state.sentenceHistory.shift(); // Remove oldest
+    }
+
+    console.log('Sentence complete! Words:', words, 'WPM:', Math.round(sentenceWPM), 'Total words:', state.totalWordsTyped);
+    console.log('History length:', state.sentenceHistory.length);
 
     // Update stats one final time
     updateStats();
@@ -309,20 +378,57 @@ function handleSentenceComplete() {
     }, 400);
 }
 
-// Update stats
+// Update stats with rolling averages
 function updateStats() {
-    // Calculate WPM
-    if (state.startTime) {
-        const timeElapsed = (Date.now() - state.startTime) / 1000 / 60; // in minutes
-        const wordsTyped = state.currentCharIndex / 5; // standard: 5 chars = 1 word
-        state.wpm = Math.round(wordsTyped / timeElapsed) || 0;
+    // Calculate WPM based on rolling average of last 4 completed sentences
+    if (state.sentenceHistory.length > 0) {
+        // Get last 4 sentences (or fewer if we don't have 4 yet)
+        const last4Sentences = state.sentenceHistory.slice(-4);
+
+        // Calculate average WPM from these sentences
+        const totalWPM = last4Sentences.reduce((sum, s) => sum + s.wpm, 0);
+        const avgWPM = totalWPM / last4Sentences.length;
+
+        // If currently typing, blend in current sentence progress
+        if (state.currentSentenceStartTime && state.currentCharIndex > 0) {
+            const currentDuration = (Date.now() - state.currentSentenceStartTime) / 1000 / 60;
+            const currentWords = state.currentCharIndex / 5; // 5 chars = 1 word
+            const currentWPM = currentDuration > 0 ? (currentWords / currentDuration) : 0;
+
+            // Blend: 70% historical average, 30% current sentence
+            state.wpm = Math.round(avgWPM * 0.7 + currentWPM * 0.3);
+        } else {
+            state.wpm = Math.round(avgWPM);
+        }
+    } else if (state.currentSentenceStartTime && state.currentCharIndex > 0) {
+        // No history yet, use current sentence only
+        const currentDuration = (Date.now() - state.currentSentenceStartTime) / 1000 / 60;
+        const currentWords = state.currentCharIndex / 5;
+        state.wpm = currentDuration > 0 ? Math.round(currentWords / currentDuration) : 0;
+    } else {
+        state.wpm = 0;
     }
-    
-    // Calculate accuracy
-    state.accuracy = state.totalChars > 0 
-        ? Math.round((state.correctChars / state.totalChars) * 100)
-        : 100;
-    
+
+    // Calculate accuracy based on rolling average of last 25 sentences
+    if (state.sentenceHistory.length > 0) {
+        // Sum up all correct and total chars from history
+        const totalCorrect = state.sentenceHistory.reduce((sum, s) => sum + s.correctChars, 0);
+        const totalTyped = state.sentenceHistory.reduce((sum, s) => sum + s.totalChars, 0);
+
+        // Add current sentence progress
+        const combinedCorrect = totalCorrect + state.currentSentenceCorrectChars;
+        const combinedTotal = totalTyped + state.currentSentenceTotalChars;
+
+        state.accuracy = combinedTotal > 0
+            ? Math.round((combinedCorrect / combinedTotal) * 100)
+            : 100;
+    } else if (state.currentSentenceTotalChars > 0) {
+        // No history yet, use current sentence only
+        state.accuracy = Math.round((state.currentSentenceCorrectChars / state.currentSentenceTotalChars) * 100);
+    } else {
+        state.accuracy = 100;
+    }
+
     // Update UI
     wpmEl.textContent = `${state.wpm} WPM`;
     accuracyEl.textContent = `Accuracy: ${state.accuracy}%`;
@@ -469,17 +575,52 @@ function setupEventListeners() {
     
     // Reset progress
     resetProgressBtn.addEventListener('click', () => {
-        if (confirm('Are you sure you want to reset your progress?')) {
+        if (confirm('Are you sure you want to reset your progress? This will clear all your typing history.')) {
+            // Clear all localStorage data
+            localStorage.removeItem('retypeProgress');
+            localStorage.removeItem('retypeSettings');
+
+            // Reset all state variables to initial values
             state.currentSentenceIndex = 0;
+            state.currentCharIndex = 0;
             state.totalWordsTyped = 0;
             state.correctChars = 0;
             state.totalChars = 0;
+            state.startTime = null;
             state.wpm = 0;
             state.accuracy = 100;
+            state.isTyping = false;
+            state.typingTimeout = null;
+
+            // Reset rolling history
+            state.sentenceHistory = [];
+            state.currentSentenceStartTime = null;
+            state.currentSentenceCorrectChars = 0;
+            state.currentSentenceTotalChars = 0;
+
+            // Reset font size to default
+            state.fontSize = 24;
+            fontSizeSlider.value = 24;
+            fontSizeValue.textContent = '24px';
+            passageEl.style.fontSize = '24px';
+
+            // Save the reset state
             saveProgress();
+            saveSettings();
+
+            // Display first sentence (fresh start)
             displayCurrentSentence();
+
+            // Update stats display to show defaults
             updateStats();
+
+            // Close modal
             menuModal.classList.remove('active');
+
+            // Refocus input
+            setTimeout(() => focusInput(), 100);
+
+            console.log('Progress reset - starting fresh!');
         }
     });
     
