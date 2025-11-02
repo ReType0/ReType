@@ -1,3 +1,59 @@
+// ============================================
+// SUPABASE INITIALIZATION
+// ============================================
+// IMPORTANT: Replace 'YOUR_SUPABASE_ANON_KEY' with your actual Supabase anon key
+// Get it from: Supabase Dashboard > Project Settings > API > anon/public key
+
+const supabaseUrl = 'https://wajonnuqudzgjivsgiam.supabase.co';
+const supabaseKey = 'YOUR_SUPABASE_ANON_KEY'; // ⚠️ REPLACE THIS WITH YOUR ACTUAL ANON KEY
+const supabase = window.supabase.createClient(supabaseUrl, supabaseKey);
+
+// ============================================
+// AUTH STATE MANAGEMENT
+// ============================================
+
+let currentUser = null;
+
+// Check if user is logged in on page load
+async function checkAuthState() {
+    const storedUser = localStorage.getItem('retype_user');
+
+    if (storedUser) {
+        try {
+            currentUser = JSON.parse(storedUser);
+            updateHeaderForLoggedInUser(currentUser.username, currentUser.level);
+        } catch (e) {
+            console.error('Error parsing stored user:', e);
+            localStorage.removeItem('retype_user');
+            updateHeaderForLoggedOutUser();
+        }
+    } else {
+        updateHeaderForLoggedOutUser();
+    }
+}
+
+// Update header to show logged-in state
+function updateHeaderForLoggedInUser(username, level) {
+    const loginBtn = document.getElementById('loginBtn');
+    const userSection = document.getElementById('userSection');
+    const usernameEl = document.getElementById('username');
+    const levelNumberEl = document.getElementById('levelNumber');
+
+    loginBtn.style.display = 'none';
+    userSection.style.display = 'flex';
+    usernameEl.textContent = username;
+    levelNumberEl.textContent = level;
+}
+
+// Update header to show logged-out state
+function updateHeaderForLoggedOutUser() {
+    const loginBtn = document.getElementById('loginBtn');
+    const userSection = document.getElementById('userSection');
+
+    loginBtn.style.display = 'block';
+    userSection.style.display = 'none';
+}
+
 // Sample book text - Harry Potter and the Sorcerer's Stone (first chapter excerpt)
 const bookTextRaw = [
     "While Mrs. Dursley was in the bathroom, Mr. Dursley crept to the bedroom window and peered down into the front garden.",
@@ -72,8 +128,10 @@ const totalWordsEl = document.getElementById('totalWords');
 const hiddenInput = document.getElementById('hiddenInput');
 const menuBtn = document.getElementById('menuBtn');
 const settingsBtn = document.getElementById('settingsBtn');
+const notificationBtn = document.getElementById('notificationBtn');
 const menuModal = document.getElementById('menuModal');
 const settingsModal = document.getElementById('settingsModal');
+const notificationPanel = document.getElementById('notificationPanel');
 const closeMenuBtn = document.getElementById('closeMenu');
 const closeSettingsBtn = document.getElementById('closeSettings');
 const resetProgressBtn = document.getElementById('resetProgress');
@@ -81,8 +139,30 @@ const fontSizeSlider = document.getElementById('fontSize');
 const fontSizeValue = document.getElementById('fontSizeValue');
 const startHint = document.getElementById('startHint');
 
+// Auth DOM Elements
+const loginBtn = document.getElementById('loginBtn');
+const authModal = document.getElementById('authModal');
+const authCloseBtn = document.getElementById('authCloseBtn');
+const authForm = document.getElementById('authForm');
+const authTitle = document.getElementById('authTitle');
+const authSubmitBtn = document.getElementById('authSubmitBtn');
+const emailInput = document.getElementById('emailInput');
+const passwordInput = document.getElementById('passwordInput');
+const usernameInput = document.getElementById('usernameInput');
+const authError = document.getElementById('authError');
+const toggleAuthMode = document.getElementById('toggleAuthMode');
+const forgotPasswordLink = document.getElementById('forgotPasswordLink');
+const googleAuthBtn = document.getElementById('googleAuthBtn');
+const usernameEl = document.getElementById('username');
+const logoutDropdown = document.getElementById('logoutDropdown');
+const logoutBtn = document.getElementById('logoutBtn');
+
+// Auth state
+let isSignupMode = false;
+
 // Initialize
 function init() {
+    checkAuthState(); // Check if user is logged in
     loadProgress();
     loadSettings();
     displayCurrentSentence();
@@ -456,8 +536,18 @@ function focusInput() {
 function setupEventListeners() {
     // Keep focus on hidden input - click anywhere to refocus
     document.addEventListener('click', (e) => {
+        // Close notification panel if clicking outside
+        if (notificationPanel.classList.contains('active') &&
+            !e.target.closest('.notification-panel') &&
+            !e.target.closest('#notificationBtn')) {
+            notificationPanel.classList.remove('active');
+            notificationBtn.classList.remove('active');
+        }
+
         // Don't refocus if clicking on modal buttons or links
-        if (!e.target.closest('.modal-content') && !e.target.closest('button')) {
+        if (!e.target.closest('.modal-content') &&
+            !e.target.closest('button') &&
+            !e.target.closest('.notification-panel')) {
             focusInput();
         }
     });
@@ -466,6 +556,7 @@ function setupEventListeners() {
     document.addEventListener('mousedown', (e) => {
         if (!e.target.closest('.modal-content') &&
             !e.target.closest('button') &&
+            !e.target.closest('.notification-panel') &&
             e.target !== hiddenInput) {
             // Refocus after mousedown completes
             setTimeout(() => focusInput(), 0);
@@ -542,6 +633,7 @@ function setupEventListeners() {
     menuBtn.addEventListener('click', (e) => {
         e.stopPropagation();
         menuModal.classList.add('active');
+        menuBtn.classList.add('active');
         hiddenInput.blur(); // Temporarily blur to allow modal interaction
     });
 
@@ -549,28 +641,56 @@ function setupEventListeners() {
     settingsBtn.addEventListener('click', (e) => {
         e.stopPropagation();
         settingsModal.classList.add('active');
+        settingsBtn.classList.add('active');
         hiddenInput.blur(); // Temporarily blur to allow modal interaction
+    });
+
+    // Notification button
+    notificationBtn.addEventListener('click', (e) => {
+        e.stopPropagation();
+        const isActive = notificationPanel.classList.contains('active');
+
+        if (isActive) {
+            // Close panel
+            notificationPanel.classList.remove('active');
+            notificationBtn.classList.remove('active');
+            setTimeout(focusInput, 100);
+        } else {
+            // Open panel
+            notificationPanel.classList.add('active');
+            notificationBtn.classList.add('active');
+            hiddenInput.blur(); // Temporarily blur to allow panel interaction
+        }
     });
 
     // Close modals and refocus
     closeMenuBtn.addEventListener('click', () => {
         menuModal.classList.remove('active');
+        menuBtn.classList.remove('active');
         setTimeout(focusInput, 100);
     });
 
     closeSettingsBtn.addEventListener('click', () => {
         settingsModal.classList.remove('active');
+        settingsBtn.classList.remove('active');
         setTimeout(focusInput, 100);
     });
 
     // Close modal on backdrop click
-    [menuModal, settingsModal].forEach(modal => {
-        modal.addEventListener('click', (e) => {
-            if (e.target === modal) {
-                modal.classList.remove('active');
-                setTimeout(focusInput, 100);
-            }
-        });
+    menuModal.addEventListener('click', (e) => {
+        if (e.target === menuModal) {
+            menuModal.classList.remove('active');
+            menuBtn.classList.remove('active');
+            setTimeout(focusInput, 100);
+        }
+    });
+
+    settingsModal.addEventListener('click', (e) => {
+        if (e.target === settingsModal) {
+            settingsModal.classList.remove('active');
+            settingsBtn.classList.remove('active');
+            setTimeout(focusInput, 100);
+        }
     });
     
     // Reset progress
@@ -671,6 +791,240 @@ function setupEventListeners() {
             }
         }
     });
+
+    // ============================================
+    // AUTH EVENT LISTENERS
+    // ============================================
+
+    // Open login modal
+    loginBtn.addEventListener('click', (e) => {
+        e.stopPropagation();
+        authModal.classList.add('active');
+        hiddenInput.blur();
+    });
+
+    // Close auth modal
+    authCloseBtn.addEventListener('click', () => {
+        authModal.classList.remove('active');
+        clearAuthForm();
+        setTimeout(focusInput, 100);
+    });
+
+    // Close auth modal on overlay click
+    authModal.addEventListener('click', (e) => {
+        if (e.target === authModal || e.target.classList.contains('auth-overlay')) {
+            authModal.classList.remove('active');
+            clearAuthForm();
+            setTimeout(focusInput, 100);
+        }
+    });
+
+    // Toggle between login and signup
+    toggleAuthMode.addEventListener('click', (e) => {
+        e.preventDefault();
+        isSignupMode = !isSignupMode;
+
+        if (isSignupMode) {
+            authTitle.textContent = 'Create your ReType account';
+            authSubmitBtn.textContent = 'Create Account';
+            toggleAuthMode.textContent = 'Already have an account? Log in';
+            usernameInput.style.display = 'block';
+            forgotPasswordLink.style.display = 'none';
+        } else {
+            authTitle.textContent = 'Log into ReType';
+            authSubmitBtn.textContent = 'Log In';
+            toggleAuthMode.textContent = 'Create an Account';
+            usernameInput.style.display = 'none';
+            forgotPasswordLink.style.display = 'inline';
+        }
+
+        clearAuthForm();
+    });
+
+    // Handle auth form submission
+    authForm.addEventListener('submit', async (e) => {
+        e.preventDefault();
+
+        const email = emailInput.value.trim();
+        const password = passwordInput.value;
+        const username = usernameInput.value.trim();
+
+        authError.textContent = '';
+        authSubmitBtn.disabled = true;
+        authSubmitBtn.textContent = isSignupMode ? 'Creating account...' : 'Logging in...';
+
+        try {
+            if (isSignupMode) {
+                await handleSignup(email, password, username);
+            } else {
+                await handleLogin(email, password);
+            }
+        } catch (error) {
+            authError.textContent = error.message;
+            authSubmitBtn.disabled = false;
+            authSubmitBtn.textContent = isSignupMode ? 'Create Account' : 'Log In';
+        }
+    });
+
+    // Forgot password (placeholder)
+    forgotPasswordLink.addEventListener('click', (e) => {
+        e.preventDefault();
+        alert('Password reset functionality coming soon!');
+    });
+
+    // Google auth (placeholder)
+    googleAuthBtn.addEventListener('click', (e) => {
+        e.preventDefault();
+        alert('Google authentication coming soon!');
+    });
+
+    // Username dropdown toggle
+    usernameEl.addEventListener('click', (e) => {
+        e.stopPropagation();
+        logoutDropdown.classList.toggle('active');
+    });
+
+    // Close dropdown when clicking outside
+    document.addEventListener('click', (e) => {
+        if (!e.target.closest('.username-container')) {
+            logoutDropdown.classList.remove('active');
+        }
+    });
+
+    // Logout
+    logoutBtn.addEventListener('click', async () => {
+        await handleLogout();
+        logoutDropdown.classList.remove('active');
+    });
+}
+
+// ============================================
+// AUTH HANDLER FUNCTIONS
+// ============================================
+
+// Handle user login
+async function handleLogin(email, password) {
+    const { data, error } = await supabase.auth.signInWithPassword({
+        email,
+        password
+    });
+
+    if (error) {
+        throw new Error('Invalid email or password');
+    }
+
+    // Fetch user profile from profiles table
+    const { data: profile, error: profileError } = await supabase
+        .from('profiles')
+        .select('username, level')
+        .eq('id', data.user.id)
+        .single();
+
+    if (profileError || !profile) {
+        throw new Error('Could not load user profile');
+    }
+
+    // Store user data
+    const userData = {
+        id: data.user.id,
+        email: data.user.email,
+        username: profile.username,
+        level: profile.level
+    };
+
+    localStorage.setItem('retype_user', JSON.stringify(userData));
+    currentUser = userData;
+
+    // Update UI
+    updateHeaderForLoggedInUser(userData.username, userData.level);
+    authModal.classList.remove('active');
+    clearAuthForm();
+
+    setTimeout(focusInput, 100);
+}
+
+// Handle user signup
+async function handleSignup(email, password, username) {
+    if (!username) {
+        throw new Error('Username is required');
+    }
+
+    // Check if username is already taken
+    const { data: existingUser } = await supabase
+        .from('profiles')
+        .select('username')
+        .eq('username', username)
+        .single();
+
+    if (existingUser) {
+        throw new Error('Username already taken');
+    }
+
+    // Create auth user
+    const { data, error } = await supabase.auth.signUp({
+        email,
+        password,
+        options: {
+            data: { username }
+        }
+    });
+
+    if (error) {
+        throw new Error(error.message);
+    }
+
+    // Create profile entry
+    const { error: profileError } = await supabase
+        .from('profiles')
+        .insert([
+            {
+                id: data.user.id,
+                username: username,
+                level: 1
+            }
+        ]);
+
+    if (profileError) {
+        throw new Error('Could not create user profile');
+    }
+
+    // Store user data
+    const userData = {
+        id: data.user.id,
+        email: data.user.email,
+        username: username,
+        level: 1
+    };
+
+    localStorage.setItem('retype_user', JSON.stringify(userData));
+    currentUser = userData;
+
+    // Update UI
+    updateHeaderForLoggedInUser(userData.username, userData.level);
+    authModal.classList.remove('active');
+    clearAuthForm();
+
+    setTimeout(focusInput, 100);
+}
+
+// Handle user logout
+async function handleLogout() {
+    await supabase.auth.signOut();
+    localStorage.removeItem('retype_user');
+    currentUser = null;
+
+    updateHeaderForLoggedOutUser();
+    setTimeout(focusInput, 100);
+}
+
+// Clear auth form
+function clearAuthForm() {
+    emailInput.value = '';
+    passwordInput.value = '';
+    usernameInput.value = '';
+    authError.textContent = '';
+    authSubmitBtn.disabled = false;
+    authSubmitBtn.textContent = isSignupMode ? 'Create Account' : 'Log In';
 }
 
 // Start the app
